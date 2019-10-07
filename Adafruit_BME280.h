@@ -210,6 +210,8 @@ public:
   float readTemperature(void);
   float readPressure(void);
   float readHumidity(void);
+  
+  void readAll(float* temperature, float* pressure, float* humidity);
 
   float readAltitude(float seaLevel);
   float seaLevelForAltitude(float altitude, float pressure);

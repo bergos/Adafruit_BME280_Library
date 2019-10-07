@@ -522,6 +522,83 @@ float Adafruit_BME280::readHumidity(void) {
   return h / 1024.0;
 }
 
+void Adafruit_BME280::readAll(float* temperature, float* pressure, float* humidity) {
+  *temperature = NAN;
+  *pressure = NAN;
+  *humidity = NAN;
+  
+  while (read8(BME280_REGISTER_STATUS) & 0x08) {
+    delay(1);
+  }
+
+  uint8_t data[8];
+
+  if (_cs == -1) {
+    _wire->beginTransmission((uint8_t)_i2caddr);
+    _wire->write((uint8_t)0xF7);
+    _wire->endTransmission();
+    _wire->requestFrom((uint8_t)_i2caddr, (byte)8);
+
+    for (int i=0; i<8; i++) {
+      data[i] = _wire->read();
+    }
+  } else {
+    return; // only supported in i2c mode
+  }
+
+  int32_t adc_T = (data[3] << 16) | (data[4] << 8) | data[5];
+
+  if (adc_T != 0x800000) { // value in case temp measurement was disabled
+    adc_T >>= 4;
+
+    int32_t var1 = ((((adc_T >> 3) - ((int32_t)_bme280_calib.dig_T1 << 1))) * ((int32_t)_bme280_calib.dig_T2)) >> 11;
+
+    int32_t var2 = (((((adc_T >> 4) - ((int32_t)_bme280_calib.dig_T1)) * ((adc_T >> 4) -
+      ((int32_t)_bme280_calib.dig_T1))) >> 12) * ((int32_t)_bme280_calib.dig_T3)) >> 14;
+
+    t_fine = var1 + var2;
+
+    *temperature = ((t_fine * 5 + 128) >> 8) / 100.0;
+  }
+  
+  
+  int32_t adc_P = (data[0] << 16) | (data[1] << 8) | data[2];
+
+  if (adc_P != 0x800000) { // value in case pressure measurement was disabled
+    adc_P >>= 4;
+
+    int64_t var1 = ((int64_t)t_fine) - 128000;
+    int64_t var2 = var1 * var1 * (int64_t)_bme280_calib.dig_P6;
+    var2 = var2 + ((var1 * (int64_t)_bme280_calib.dig_P5) << 17);
+    var2 = var2 + (((int64_t)_bme280_calib.dig_P4) << 35);
+    var1 = ((var1 * var1 * (int64_t)_bme280_calib.dig_P3) >> 8) + ((var1 * (int64_t)_bme280_calib.dig_P2) << 12);
+    var1 = (((((int64_t)1) << 47) + var1)) * ((int64_t)_bme280_calib.dig_P1) >> 33;
+
+    if (var1 != 0) { // avoid exception caused by division by zero
+      int64_t p = 1048576 - adc_P;
+      p = (((p << 31) - var2) * 3125) / var1;
+      var1 = (((int64_t)_bme280_calib.dig_P9) * (p >> 13) * (p >> 13)) >> 25;
+      var2 = (((int64_t)_bme280_calib.dig_P8) * p) >> 19;
+
+      *pressure = (((p + var1 + var2) >> 8) + (((int64_t)_bme280_calib.dig_P7) << 4)) / 256.0;
+    }
+  }
+  
+  int32_t adc_H = data[6] << 8 | data[7];
+
+  if (adc_H != 0x8000) { // value in case humidity measurement was disabled
+    int32_t v_x1_u32r = (t_fine - ((int32_t)76800));
+    v_x1_u32r = (((((adc_H << 14) - (((int32_t)_bme280_calib.dig_H4) << 20) - (((int32_t)_bme280_calib.dig_H5) * v_x1_u32r)) +
+      ((int32_t)16384)) >> 15) *
+      (((((((v_x1_u32r * ((int32_t)_bme280_calib.dig_H6)) >> 10) * (((v_x1_u32r * ((int32_t)_bme280_calib.dig_H3)) >> 11) +
+      ((int32_t)32768))) >> 10) + ((int32_t)2097152)) * ((int32_t)_bme280_calib.dig_H2) + 8192) >> 14));
+    v_x1_u32r = (v_x1_u32r - (((((v_x1_u32r >> 15) * (v_x1_u32r >> 15)) >> 7) * ((int32_t)_bme280_calib.dig_H1)) >> 4));
+    v_x1_u32r = (v_x1_u32r < 0) ? 0 : v_x1_u32r;
+    v_x1_u32r = (v_x1_u32r > 419430400) ? 419430400 : v_x1_u32r;
+    *humidity = (v_x1_u32r >> 12) / 1024.0;
+  }
+}
+
 /*!
  *   Calculates the altitude (in meters) from the specified atmospheric
  *   pressure (in hPa), and sea-level pressure (in hPa).
